@@ -16,13 +16,13 @@ import javax.inject.Singleton
 @Singleton
 class KotlinPlugin @Inject constructor(val executors: KobaltExecutors, val dependencyManager: DependencyManager,
         val settings: KobaltSettings, override val configActor: ConfigActor<KotlinConfig>,
-        val kotlinJarFiles: KotlinJarFiles)
+        val kotlinJarFiles: KotlinJarFiles, val nativeCompiler: KotlinNativeCompiler)
     : BaseJvmPlugin<KotlinConfig>(configActor), IDocContributor, IClasspathContributor, ICompilerContributor,
         IBuildConfigContributor {
-
     companion object {
         val PLUGIN_NAME = "Kotlin"
-        val SOURCE_SUFFIXES = listOf("kt")
+        // TODO: def should only be here if we're configured for kotlin-native
+        val SOURCE_SUFFIXES = listOf("kt", "def")
     }
 
     override val name = PLUGIN_NAME
@@ -75,15 +75,22 @@ class KotlinPlugin @Inject constructor(val executors: KobaltExecutors, val depen
 //        }
 //        return TaskResult(success)
 //    }
+    
 
-    class KotlinCompiler : ICompiler {
+    class KotlinCompiler: ICompiler {
         override fun compile(project: Project, context: KobaltContext, info: CompilerActionInfo): TaskResult {
-            return kotlinCompilePrivate {
-                classpath(info.dependencies.map { it.jarFile.get().path })
-                sourceFiles(info.sourceFiles)
-                compilerArgs(info.compilerArgs)
-                output = info.outputDir
-            }.compile(project, context)
+            val plugin = (Kobalt.findPlugin(KotlinPlugin.PLUGIN_NAME) as KotlinPlugin)
+            val platform = plugin.configurations.values.firstOrNull()?.platform ?: KotlinPlatform.JAVA
+
+            return when(platform) {
+                KotlinPlatform.JAVA -> kotlinCompilePrivate {
+                    classpath(info.dependencies.map { it.jarFile.get().path })
+                    sourceFiles(info.sourceFiles)
+                    compilerArgs(info.compilerArgs)
+                    output = info.outputDir
+                }.compile(project, context)
+                KotlinPlatform.NATIVE -> plugin.nativeCompiler.compile(project, context, info)
+            }
         }
 
     }
@@ -136,6 +143,8 @@ class KotlinConfig(val project: Project) {
     /** The version of the Kotlin compiler */
     @Directive
     var version: String? = null
+    @Directive
+    var platform = KotlinPlatform.JAVA
 }
 
 @Directive
@@ -145,6 +154,11 @@ fun Project.kotlinCompiler(init: KotlinConfig.() -> Unit) =
         (Kobalt.findPlugin(KotlinPlugin.PLUGIN_NAME) as KotlinPlugin).addConfiguration(this, config)
     }
 
+enum class KotlinPlatform {
+    JAVA,
+    NATIVE,
+    //JS // TODO
+}
 //class SourceLinkMapItem {
 //    var dir: String = ""
 //    var url: String = ""
